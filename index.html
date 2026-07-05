@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CS2 Tactical Strategy Radar</title>
+    <style>
+        /* Base setup for side-by-side viewport wrapping */
+        body {
+            background: #12131a;
+            color: #f0f2f5;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 1. WIDENED SIDEBAR PANEL */
+        .sidebar-panel {
+            width: 400px; /* Expanded from 320px for text breathing room */
+            min-width: 400px;
+            background: #1a1c24;
+            border-right: 1px solid #2d3142;
+            padding: 22px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: 100%;
+            overflow-y: auto;
+            box-shadow: 4px 0 12px rgba(0,0,0,0.2);
+        }
+
+        h2 {
+            margin: 0 0 4px 0;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .section-divider {
+            border-top: 1px solid #2d3142;
+            padding-top: 18px;
+            margin-top: 4px;
+        }
+
+        label {
+            font-size: 11px;
+            font-weight: bold;
+            color: #929aab;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* COMPACT CHARACTER GRID */
+        .char-index-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr); /* Bumped to 7 for wider column scaling */
+            gap: 4px;
+            font-family: monospace;
+            width: 100%;
+        }
+
+        /* Minimized matrix button styling */
+        .char-index-grid button {
+            padding: 6px 0 !important;
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            width: 100%;
+        }
+
+        /* EXPANDED PLAYER RESULTS CHIPS WRAPPER */
+        .player-results-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            font-family: monospace;
+            min-height: 60px;
+            max-height: 180px;
+            overflow-y: auto;
+            background: #12131a;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #252836;
+            align-content: flex-start;
+        }
+
+        /* Cleaner, wider sizing for actionable player profile names */
+        .player-results-container button {
+            padding: 6px 12px !important; /* Larger click/tap target */
+            font-size: 13px !important;   /* Highly readable font scale */
+            width: auto;
+            font-weight: 500;
+        }
+
+        select, .playback-controls button {
+            background: #2a2d3d;
+            color: #fff;
+            border: 1px solid #3d4259;
+            padding: 10px 14px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            width: 100%;
+            box-sizing: border-box;
+            transition: background 0.15s ease;
+        }
+
+        button:hover, select:hover {
+            background: #34384d;
+        }
+
+        /* Playback tool block controls layout styling */
+        .playback-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            align-items: center;
+        }
+
+        #timeDisplay {
+            font-family: monospace;
+            font-size: 13px;
+            background: #12131a;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #252836;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        /* 2. MAIN APP VIEWPORT CANVAS WRAPPER */
+        .main-viewport {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            overflow: auto;
+            background: #0d0e12;
+        }
+
+        .canvas-container {
+            position: relative;
+            box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid #252836;
+        }
+
+        #radarCanvas {
+            display: block;
+        }
+
+        /* FIXED METRICS LEDGER LINE EXTENSION */
+        .stats-overlay {
+            margin-top: 16px;
+            font-size: 13px;
+            color: #929aab;
+            font-family: monospace;
+            width: 100%; /* Matches dynamic flex container space, clearing any text cuts */
+            max-width: 1024px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Left Sidebar: Controls & Selection Matrices -->
+    <div class="sidebar-panel">
+        <h2>🎯 Tactical Query</h2>
+        
+        <!-- 1. Matrix Search Block -->
+        <div class="section-group">
+            <label>Filter Player Profile</label>
+            <div id="charIndexGrid" class="char-index-grid"></div>
+            <div id="playerResultsContainer" class="player-results-container">
+                <span class="placeholder-text" style="color: #64748b; font-style: italic; font-size: 12px;">Select matrix key character...</span>
+            </div>
+            <input type="hidden" id="playerSelect" value="">
+        </div>
+
+        <!-- 2. Match Settings Selectors Block -->
+        <div class="section-group section-divider">
+            <label for="sideSelect">Side</label>
+            <select id="sideSelect">
+                
+                <option value="ct">Counter-Terrorist (CT)</option>
+                <option value="t">Terrorist (T)</option>
+            </select>
+        </div>
+
+        <div class="section-group">
+            <label for="mapSelect">Map Asset</label>
+            <select id="mapSelect">
+                
+            </select>
+        </div>
+
+        <!-- 3. Engine Control Handlers -->
+        <div class="section-group section-divider">
+            <label>Simulation State</label>
+            <div class="playback-controls">
+                <button id="playPauseBtn">Pause</button>
+                <div id="timeDisplay">Syncing...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Content Window: The Map Display Surface -->
+    <div class="main-viewport">
+        <div class="canvas-container">
+            <canvas id="radarCanvas" width="1024" height="1024"></canvas>
+        </div>
+        <div class="stats-overlay" id="matchMeta">Select parameters to run query.</div>
+    </div>
+
+    <!-- Calls your visualization tracking loop -->
+    <script src="visualizer.js"></script>
+</body>
+</html>
