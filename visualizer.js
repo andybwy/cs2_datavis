@@ -122,6 +122,16 @@ function lerp(start, end, progress) {
     return start + (end - start) * progress;
 }
 
+function lerpAngle(start, end, progress) {
+    let difference = end - start;
+    
+    // Normalize difference to (-180, 180]
+    while (difference < -180) difference += 360;
+    while (difference > 180)  difference -= 360;
+    
+    return start + difference * progress;
+}
+
 // Generates the selection matrix interface dynamically using only active characters
 function initializeCharacterGrid() {
     const gridContainer = document.getElementById('charIndexGrid');
@@ -619,7 +629,7 @@ function drawFrameAt(exactFrameIndex, currentTimestamp) {
 
             drawX = lerp(currentFrame[0], nextFrame[0], progress);
             drawY = lerp(currentFrame[1], nextFrame[1], progress);
-            drawYaw = lerp(currentFrame[2], nextFrame[2], progress);
+            drawYaw = lerpAngle(currentFrame[2], nextFrame[2], progress);
         } else {
             const finalFrame = round.coords[round.coords.length - 1];
             if (!finalFrame) return;
