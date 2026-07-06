@@ -1,3 +1,7 @@
+const CONFIG = {
+    API_BASE: 'http://localhost:8000', 
+};
+
 // --- 1. CORE RADAR & PLAYBACK CONFIGURATION ---
 const CANVAS_SIZE = 1024;
 let animationFrameId = null;
@@ -228,7 +232,7 @@ async function init() {
     document.getElementById('playPauseBtn').addEventListener('click', togglePlayback);
     
     try {
-        const response = await fetch('http://localhost:8000/api/filters');
+        const response = await fetch(new URL('/api/filters', CONFIG.API_BASE));
         if (!response.ok) throw new Error("Could not fetch database filter metadata.");
         const filters = await response.json();
 
@@ -383,8 +387,14 @@ async function triggerDatabaseQuery(explicitSteamId = null, explicitMap = null, 
     document.getElementById('matchMeta').innerText = "🔍 Fetching custom trajectory records from MongoDB...";
 
     try {
-        const params = new URLSearchParams({ steamid, side, map_name: mapName });
-        const response = await fetch(`http://localhost:8000/api/query?${params.toString()}`);
+        const queryurl = new URL('/api/query', CONFIG.API_BASE);
+        queryurl.search = new URLSearchParams({ 
+            steamid, 
+            side, 
+            map_name: mapName 
+        }).toString();
+
+        const response = await fetch(queryurl);
         
         if (!response.ok) throw new Error("Query lookup failed.");
         const payload = await response.json();
