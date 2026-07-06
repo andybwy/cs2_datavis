@@ -159,7 +159,20 @@
         }
 
         #radarCanvas {
-            display: block;
+            /* Prevent it from ever exceeding its native size */
+            max-width: 1024px;
+            max-height: 1024px;
+            
+            /* Force it to scale down to fit the screen width */
+            width: 100%;
+            
+            /* The magic line: ensures it never goes taller than the viewable screen */
+            height: auto;
+            max-height: 80vh; /* Takes up a maximum of 80% of the browser's vertical height */
+            
+            /* Keeps things looking sharp if scaled down */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
         }
 
         /* FIXED METRICS LEDGER LINE EXTENSION */
