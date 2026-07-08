@@ -2,22 +2,23 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from fastapi.middleware.gzip import GZipMiddleware  # 🚀 Step 2: Import Gzip middleware
-
+import os
+from dotenv import load_dotenv
+load_dotenv()
 app = FastAPI(title="CS2 Tactical Analytics API")
 
-'''
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[os.getenv("ALLOW_ORIGINS"), ""],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=[os.getenv("ALLOW_ORIGINS"), ""],
     allow_headers=["*"],
 )
-'''
+
 
 app.add_middleware(GZipMiddleware, minimum_size=500)  # 🚀 Step 3: Add Gzip middleware
 
-client = MongoClient("mongodb://localhost:27017/")
+client = MongoClient(os.getenv("DB_URL"))
 db = client["cs2_database"]
 
 MAP_RADAR_PROPERTIES = {
@@ -172,4 +173,11 @@ async def query_trajectories(
         "available_maps": available_maps,
         "trajectories": final_trajectories,
         "grenades": final_grenades
+    }
+
+@app.get("/api/config")
+def get_frontend_config():
+    import os
+    return {
+        "API_BASE_URL": os.getenv("API_BASE_URL")
     }
