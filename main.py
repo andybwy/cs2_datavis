@@ -7,11 +7,19 @@ from dotenv import load_dotenv
 load_dotenv()
 app = FastAPI(title="CS2 Tactical Analytics API")
 
+#example .env
+'''
+# .env
+DB_URL=mongodb://localhost:27017/
+ALLOW_ORIGINS=*
+ALLOW_METHODS=GET
+'''
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[os.getenv("ALLOW_ORIGINS"), ""],
     allow_credentials=True,
-    allow_methods=[os.getenv("ALLOW_ORIGINS"), ""],
+    allow_methods=[os.getenv("ALLOW_METHODS"), ""],
     allow_headers=["*"],
 )
 
@@ -173,11 +181,4 @@ async def query_trajectories(
         "available_maps": available_maps,
         "trajectories": final_trajectories,
         "grenades": final_grenades
-    }
-
-@app.get("/api/config")
-def get_frontend_config():
-    import os
-    return {
-        "API_BASE_URL": os.getenv("API_BASE_URL")
     }
