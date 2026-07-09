@@ -42,8 +42,8 @@ MAP_RADAR_PROPERTIES = {
 # 1. Populates your filter dropdowns instantly from the registry
 @app.get("/api/filters")
 async def get_filters():
-    players_cursor = db.players.find({}, {"name": 1, "_id": 1})
-    player_list = [{"steamid": p["_id"], "name": p["name"]} for p in players_cursor]
+    players_cursor = db.visualizer_ready_data.find({}, {"name": 1, "_id": 1})
+    player_list = [{"steamid": str(p["_id"]), "name": p["name"]} for p in players_cursor]
     
     unique_maps = db.player_matches.distinct("map_name")
     
@@ -53,132 +53,79 @@ async def get_filters():
     }
 
 # 2. Handles the custom tactical overlay query
+# Define the current Active Duty map pool based on your configuration parameters
+ACTIVE_DUTY_POOL = {
+    "de_mirage", "de_inferno", "de_nuke", "de_ancient", 
+    "de_anubis", "de_dust2", "de_overpass"
+}
+
 @app.get("/api/query")
 async def query_trajectories(
     steamid: str = Query(...),
-    side: str = Query(...),
-    map_name: str = Query(...)
+    side: str = Query(...)
 ):
     clean_steamid = int(steamid)
-    is_global_query = (map_name == "all" or not map_name or map_name.strip() == "")
     side_lower = side.lower()
 
-    # --- 1. DEFINE BASELINE MATCH STAGE ---
-    match_filter = {"steamid": clean_steamid}
-    if not is_global_query:
-        match_filter["map_name"] = map_name
+    # 1. Fetch the entire player profile document
+    player_profile = db.visualizer_ready_data.find_one({"_id": clean_steamid})
 
-    # --- 2. INITIALIZE PIPELINE WITH SORT ---
-    pipeline = [
-        {"$match": match_filter},
-        {"$sort": {"date_played": -1}}
-    ]
-
-    # --- 3. HANDLE CEILING LIMIT ENFORCEMENT ($slice top 5 per map) ---
-    if is_global_query:
-        pipeline.extend([
-            {"$group": {
-                "_id": "$map_name",
-                "docs": {"$push": "$$ROOT"}
-            }},
-            {"$project": {
-                "docs": {"$slice": ["$docs", 5]}
-            }},
-            {"$unwind": "$docs"},
-            {"$replaceRoot": {"newRoot": "$docs"}}
-        ])
-    else:
-        pipeline.append({"$limit": 5})
-
-    # --- 4. JOIN WITH MATCH_DATA AND EXTRACT TARGETED RECORDS ---
-    pipeline.extend([
-        {
-            "$lookup": {
-                "from": "match_data",
-                "localField": "match_doc_id",
-                "foreignField": "_id",
-                "as": "match"
-            }
-        },
-        {"$unwind": "$match"},
-        {
-            "$project": {
-                "map_name": "$map_name",
-                # Extract and filter down trajectories instantly inside the DB engine
-                "trajectories": {
-                    "$filter": {
-                        "input": "$match.trajectories",
-                        "as": "t",
-                        "cond": {
-                            "$and": [
-                                {"$eq": [{"$toString": "$$t.steamid"}, str(steamid)]},
-                                {"$or": [
-                                    {"$eq": [side_lower, "all"]},
-                                    {"$eq": [{"$toLower": "$$t.side"}, side_lower]}
-                                ]}
-                            ]
-                        }
-                    }
-                },
-                # Pull the raw grenade list along for downstream validation setup
-                "raw_grenades": "$match.grenades"
-            }
-        }
-    ])
-
-    # Run the aggregation pipeline
-    aggregated_matches = list(db.player_matches.aggregate(pipeline))
-
-    if not aggregated_matches:
+    if not player_profile or "maps" not in player_profile:
         return {
-            "map_name": map_name, 
-            "radar_config": MAP_RADAR_PROPERTIES.get(map_name, MAP_RADAR_PROPERTIES["de_mirage"]),
-            "trajectories": [], 
-            "grenades": []
+            "available_maps": [],
+            "maps": {}
         }
 
-    # --- 5. SURFACE CORRELATION FOR GRENADES ---
-    final_trajectories = []
-    final_grenades = []
+    maps_dict = player_profile["maps"]
+    
+    # Filter available maps to ONLY include those in the Active Duty Pool
+    available_maps = sorted([m for m in maps_dict.keys() if m in ACTIVE_DUTY_POOL])
 
-    for doc in aggregated_matches:
-        associated_map = doc.get("map_name", "de_mirage")
-        allowed_rounds = set()
-        target_steamids = set()
+    final_maps_payload = {}
+    
+    for map_name in available_maps:
+        map_data = maps_dict[map_name]
+        raw_trajectories = map_data.get("trajectories", [])
+        raw_grenades = map_data.get("grenades", [])
 
-        # Reshape lean trajectory documents for delivery
-        for traj in doc.get("trajectories", []):
-            final_trajectories.append({
-                "round_num": traj["round_num"],
-                "side": traj["side"].lower(),
-                "coords": traj["coords"],
-                "map_name": associated_map
-            })
-            allowed_rounds.add(traj["round_num"])
-            if traj.get("steamid"):
-                target_steamids.add(str(traj["steamid"]))
+        # --- 2. CEILING LIMIT ENFORCEMENT: ISOLATE TOP 5 LATEST MATCHES ---
+        # Map each unique match_id to its respective date_played timestamp
+        match_dates = {}
+        for traj in raw_trajectories:
+            m_id = traj.get("match_id")
+            d_played = traj.get("date_played")
+            if m_id and d_played:
+                # Keep track of the latest date seen for this match
+                if m_id not in match_dates or d_played > match_dates[m_id]:
+                    match_dates[m_id] = d_played
 
-        # Correlate grenades quickly via hash lookups using local filtered structures
-        for nade in doc.get("raw_grenades", []):
-            nade_thrower_id = str(nade.get("thrower_id"))
+        # Sort matches by date descending and take the top 5 most recent IDs
+        latest_5_matches = set(
+            sorted(match_dates, key=match_dates.get, reverse=True)[:5]
+        )
 
-            if nade.get("round_num") in allowed_rounds and nade_thrower_id in target_steamids:
-                if side_lower == "all" or nade.get("side", "").lower() == side_lower:
-                    final_grenades.append({
-                        "round_num": nade["round_num"],
-                        "type": nade["type"],
-                        "path": nade["path"],
-                        "map_name": associated_map,
-                        "side": nade.get("side", "").lower(),
-                        "thrower_id": nade.get("thrower_id", ""),
-                        "entity_id": nade.get("entity_id", 0)
-                    })
+        # --- 3. FILTER ARRAYS DOWN TO THE TOP 5 MATCHES & SIDE CONTEXT ---
+        trajectories = [
+            t for t in raw_trajectories 
+            if t.get("match_id") in latest_5_matches and 
+            (side_lower == "all" or t.get("side") == side_lower)
+        ]
+        
+        grenades = [
+            g for g in raw_grenades 
+            if g.get("match_id") in latest_5_matches and 
+            (side_lower == "all" or g.get("side") == side_lower)
+        ]
 
-    # --- 6. ASSEMBLE AND STREAM VIA THE MODERN SERIALIZATION ENGINE ---
-    available_maps = list({t["map_name"] for t in final_trajectories})
+        # Sort final trajectory lines for the renderer UI timeline
+        trajectories.sort(key=lambda x: x.get("date_played", ""), reverse=True)
+
+        final_maps_payload[map_name] = {
+            "trajectories": trajectories,
+            "grenades": grenades
+        }
+
     return {
-        "map_name": map_name,
         "available_maps": available_maps,
-        "trajectories": final_trajectories,
-        "grenades": final_grenades
+        "maps": final_maps_payload
     }

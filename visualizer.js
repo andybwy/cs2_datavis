@@ -199,7 +199,7 @@ function filterPlayersByChar(char, targetButton) {
             const activeSteamId = player.steamid;
 
             // Call your query with global flags to pull everything into the smart cache in one trip
-            triggerDatabaseQuery(activeSteamId, 'all', 'all');
+            triggerDatabaseQuery(activeSteamId, 'all');
         };
         
         resultsContainer.appendChild(pBtn);
@@ -213,10 +213,9 @@ async function init() {
         // Get the current values from the UI
         const steamid = document.getElementById('playerSelect').value;
         const side = document.getElementById('sideSelect').value;
-        const map = document.getElementById('mapSelect').value;
         
         // Explicitly call the query with resolved values
-        triggerDatabaseQuery(steamid, map, side);
+        triggerDatabaseQuery(steamid, side);
     });
     document.getElementById('mapSelect').addEventListener('change', () => {
         const steamid = document.getElementById('playerSelect').value;
@@ -224,18 +223,24 @@ async function init() {
         const map = document.getElementById('mapSelect').value;
         
         // 1. Construct the key we used to save this slice earlier
-        const cacheKey = `${steamid}_${map}_${side}`;
+        const cacheKey = `${steamid}`;
         const cachedData = getFromCache(cacheKey);
 
-        if (cachedData) {
+        if (cachedData && cachedData.maps[map]) {
             // 2. 🚀 THIS IS THE KEY: Manually trigger the state loader
             // This updates the map image, the trajectoryData, and the animation loop
             console.log(`✅ Cache Hit for: ${cacheKey}`); // 🚀 Log it!
-            loadPayloadIntoState(cachedData);
+            const mapSlice = {
+                map_name: map,
+                available_maps: cachedData.available_maps,
+                trajectories: cachedData.maps[map].trajectories,
+                grenades: cachedData.maps[map].grenades
+            };
+            loadPayloadIntoState(mapSlice);
         } else {
             // If it's not in cache, fetch it
             console.log(`📡 Cache Miss, fetching: ${cacheKey}`); // 🚀 Log it!
-            triggerDatabaseQuery(steamid, map, side);
+            triggerDatabaseQuery(steamid, side);
         }
     });
 
@@ -248,13 +253,15 @@ async function init() {
 
         globalPlayerList = filters.players || [];
         initializeCharacterGrid();
-
+        
+        /*
         const mapSelect = document.getElementById('mapSelect');
         filters.maps.forEach(m => {
             const opt = document.createElement('option');
             opt.value = m; opt.innerText = m;
             mapSelect.appendChild(opt);
         });
+        */
 
         triggerDatabaseQuery();
 
@@ -322,7 +329,7 @@ function updateMapDropdown(maps) {
 
 
 // --- 3. DATABASE QUERY ENGINE ---
-async function triggerDatabaseQuery(explicitSteamId = null, explicitMap = null, explicitSide = null) {
+async function triggerDatabaseQuery(explicitSteamId = null, explicitSide = null) {
     if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
         animationFrameId = null;
@@ -331,12 +338,12 @@ async function triggerDatabaseQuery(explicitSteamId = null, explicitMap = null, 
     // 1. Prioritize parameters, fall back to DOM elements only if they are missing
     const steamid = explicitSteamId || document.getElementById('playerSelect').value;
     const side = explicitSide || document.getElementById('sideSelect').value;
-    const mapName = explicitMap || document.getElementById('mapSelect').value;
+    let mapName = document.getElementById('mapSelect').value;
 
 
     const playerName = playerSelect.options ? playerSelect.options[playerSelect.selectedIndex]?.text : "Selected Player";
     const sideText = side.toUpperCase();
-    const mapText = mapName.toUpperCase();
+    const sideLower = side.toLowerCase();
 
     if (!steamid) {
         console.warn("Dropdowns not ready yet. Postponing query.");
@@ -349,203 +356,76 @@ async function triggerDatabaseQuery(explicitSteamId = null, explicitMap = null, 
     isPlaying = false;
 
     // 🚀 GENERATE UNIQUE CACHE KEY FOR THIS COMBINATION
-    const cacheKey = `${steamid}_${mapName}_${side}`;
-
-    const mapKeyPart = mapName || mapText; 
-    const sideKeyPart = side || sideText;
-    const currentCacheKey = `${steamid}_${mapKeyPart}_${sideKeyPart}`;
-    const ctKey = `${steamid}_${mapKeyPart}_ct`;
-    const tKey = `${steamid}_${mapKeyPart}_t`;
-    // 🚀 BULLETPROOF STITCHER
-    // Change your conditional lookups from: if (trajectoryCache[ctKey] && trajectoryCache[tKey])
-    // Change to use .has():
-    if (!trajectoryCache.has(currentCacheKey) && trajectoryCache.has(ctKey) && trajectoryCache.has(tKey)) {
-        console.log(`🧵 Cache Stitcher Engaged: Combining cached CT and T slices for ${mapKeyPart}`);
-        
-        const stitchedPayload = {
-            map_name: mapKeyPart,
-            radar_config: trajectoryCache.get(ctKey).radar_config || trajectoryCache.get(tKey).radar_config,
-            trajectories: [
-                ...(trajectoryCache.get(ctKey).trajectories || []),
-                ...(trajectoryCache.get(tKey).trajectories || [])
-            ],
-            grenades: [
-                ...(trajectoryCache.get(ctKey).grenades || []),
-                ...(trajectoryCache.get(tKey).grenades || [])
-            ]
-        };
-        
-        saveToCache(currentCacheKey, stitchedPayload);
-    }
+    let cacheKey = `${steamid}`;
+    let cachedData = getFromCache(cacheKey)
+    let payload = null;
 
     // 🚀 HIT CHECK: If we already queried this, load it instantly from memory!
-    const cachedData = getFromCache(currentCacheKey);
     if (cachedData) {
-        console.log(`⚡ Cache Hit for Key: ${currentCacheKey}`);
-        
+        console.log(`⚡ Cache Hit for Key: ${cacheKey}`);
+        payload = cachedData;
         // If it was a cached empty/warning state, handle it immediately
         if (cachedData.isEmptyState) {
-            renderEmptyWarningState(playerName, mapText, sideText);
+            renderEmptyWarningState(playerName, mapName);
             return;
         }
-        
-        loadPayloadIntoState(cachedData);
-        return; 
+    } else {
+        document.getElementById('matchMeta').innerText = "🔍 Fetching custom trajectory records from MongoDB...";
+        try {
+            const queryurl = new URL('/api/query', CONFIG.API_BASE);
+            queryurl.search = new URLSearchParams({ 
+                steamid, 
+                side: 'all' 
+            }).toString();
+
+            const response = await fetch(queryurl);
+            
+            if (!response.ok) throw new Error("Query lookup failed.");
+            payload = await response.json();
+
+            // Check if data is empty, cache the empty state layout pattern
+            if (!payload.available_maps || payload.available_maps.length === 0) {
+                saveToCache(cacheKey, { isEmptyState: true });
+                renderEmptyWarningState(playerName, mapText, sideText);
+                return; 
+            }
+
+            // Save all 3 profile matrices into cache memory
+            saveToCache(`${steamid}`, payload);
+            console.log(`💾 Cached data for player ${steamid}`);
+
+        } catch (err) {
+            console.error("Query failed:", err);
+            document.getElementById('matchMeta').innerText = "❌ No records found matching current parameter choices.";
+        }
     }
 
-    // --- CACHE MISS: Proceed with the standard MongoDB fetch call ---
-    document.getElementById('matchMeta').innerText = "🔍 Fetching custom trajectory records from MongoDB...";
-
-    try {
-        const queryurl = new URL('/api/query', CONFIG.API_BASE);
-        queryurl.search = new URLSearchParams({ 
-            steamid, 
-            side, 
-            map_name: mapName 
-        }).toString();
-
-        const response = await fetch(queryurl);
-        
-        if (!response.ok) throw new Error("Query lookup failed.");
-        const payload = await response.json();
-
-        // Check if data is empty, cache the empty state layout pattern
-        if (!payload.trajectories || payload.trajectories.length === 0) {
-            saveToCache(currentCacheKey, { isEmptyState: true });
-            renderEmptyWarningState(playerName, mapText, sideText);
-            return; 
-        }
-
-        // 🚀 1. STORE THE RAW MASTER DATA IN THE CACHE
-        saveToCache(currentCacheKey, payload);
-        console.log(`💾 Successfully cached data for Key: ${currentCacheKey}`);
-
-        // 🧠 2. POPULATE SMART CACHE HIERARCHY
-        if (mapName === 'all') {
-            // A. Slice "all maps" by CT and T sides globally
-            const globalCtKey = `${steamid}_all_ct`;
-            const globalTKey = `${steamid}_all_t`;
-
-            if (!trajectoryCache.has(globalCtKey)) {
-                const globalCt = structuredClone(payload);
-                globalCt.trajectories = payload.trajectories.filter(t => t.side?.toLowerCase() === 'ct');
-                if (payload.grenades) {
-                    const ctRounds = new Set(globalCt.trajectories.map(t => t.round_num));
-                    globalCt.grenades = payload.grenades.filter(g => ctRounds.has(g.round_num));
-                }
-                saveToCache(globalCtKey, globalCt.trajectories.length > 0 ? globalCt : { isEmptyState: true });
-            }
-
-            if (!trajectoryCache.has(globalTKey)) {
-                const globalT = structuredClone(payload);
-                globalT.trajectories = payload.trajectories.filter(t => t.side?.toLowerCase() === 't');
-                if (payload.grenades) {
-                    const tRounds = new Set(globalT.trajectories.map(t => t.round_num));
-                    globalT.grenades = payload.grenades.filter(g => tRounds.has(g.round_num));
-                }
-                saveToCache(globalTKey, globalT.trajectories.length > 0 ? globalT : { isEmptyState: true });
-            }
-
-            // B. Extract individual map names from inside the trajectories array
-            const mapsInPayload = new Set();
-            payload.trajectories.forEach(t => {
-                const m = t.map_name || t.map || t.mapName;
-                if (m && m.toLowerCase() !== 'all') {
-                    mapsInPayload.add(m.toLowerCase());
-                }
-            });
-
-            // Slice up the data for each specific map found inside the master list
-            mapsInPayload.forEach(targetMap => {
-                const mapTrajectories = payload.trajectories.filter(t => {
-                    const m = t.map_name || t.map || t.mapName;
-                    return m && m.toLowerCase() === targetMap;
-                });
-                
-                const mapGrenades = payload.grenades ? payload.grenades.filter(g => {
-                    const m = g.map_name || g.map || g.mapName;
-                    return m && m.toLowerCase() === targetMap;
-                }) : [];
-
-                // Pre-populate all three side variations for this specific map chunk
-                ['all', 'ct', 't'].forEach(s => {
-                    const dynamicKey = `${steamid}_${targetMap}_${s}`;
-                    if (trajectoryCache.has(dynamicKey)) return; 
-
-                    const splitPayload = structuredClone(payload);
-                    splitPayload.map_name = targetMap;
-
-                    if (s === 'all') {
-                        splitPayload.trajectories = mapTrajectories;
-                        splitPayload.grenades = mapGrenades;
-                    } else {
-                        splitPayload.trajectories = mapTrajectories.filter(t => t.side?.toLowerCase() === s);
-                        if (payload.grenades) {
-                            const validRounds = new Set(splitPayload.trajectories.map(t => t.round_num));
-                            splitPayload.grenades = mapGrenades.filter(g => validRounds.has(g.round_num));
-                        }
-                    }
-
-                    // Dynamically look up the correct radar configs for individual maps if available
-                    // (Optional: can fall back to root config if your backend stamps them per trajectory block)
-                    saveToCache(dynamicKey, splitPayload.trajectories.length > 0 ? splitPayload : { isEmptyState: true });
-                });
-            });
-
-            console.log(`🧠 Smart Cache Profile Generated for all sub-maps and global side shifts.`);
-        } 
-        
-        // C. Populate CT/T views if they fetched a specific map but "all" sides
-        else if (side === 'all') {
-            const ctKey = `${steamid}_${mapName}_ct`;
-            const tKey = `${steamid}_${mapName}_t`;
-
-            if (!trajectoryCache.has(ctKey)) {
-                const ctPayload = structuredClone(payload);
-                ctPayload.trajectories = payload.trajectories.filter(t => t.side?.toLowerCase() === 'ct');
-                if (payload.grenades) {
-                    const ctRounds = new Set(ctPayload.trajectories.map(t => t.round_num));
-                    ctPayload.grenades = payload.grenades.filter(g => ctRounds.has(g.round_num));
-                }
-                saveToCache(ctKey, ctPayload.trajectories.length > 0 ? ctPayload : { isEmptyState: true });
-            }
-
-            if (!trajectoryCache.has(tKey)) {
-                const tPayload = structuredClone(payload);
-                tPayload.trajectories = payload.trajectories.filter(t => t.side?.toLowerCase() === 't');
-                if (payload.grenades) {
-                    const tRounds = new Set(tPayload.trajectories.map(t => t.round_num));
-                    tPayload.grenades = payload.grenades.filter(g => tRounds.has(g.round_num));
-                }
-                saveToCache(tKey, tPayload.trajectories.length > 0 ? tPayload : { isEmptyState: true });
-            }
-        }
-
-        // 🚀 3. THE KEY CHANGE: Read the clean current data slice back out of the cache!
-        // If the dropdown says "All Maps", we want to display the first available mapped data slice 
-        // instead of the broken mixed document array.
-        let dataToLoad = getFromCache(currentCacheKey);
-        
-        if (mapName === 'all' && payload.trajectories.length > 0) {
-            // Find the first valid map name inside the dataset to display as the initial view
-            const firstValidMap = payload.trajectories[0].map_name || 'de_mirage';
-            const resolvedSliceKey = `${steamid}_${firstValidMap.toLowerCase()}_${side.toLowerCase()}`;
-            
-            console.log(`🎯 Redirecting "All Maps" fallback view to active asset profile: ${resolvedSliceKey}`);
-            dataToLoad = getFromCache(resolvedSliceKey) || dataToLoad;
-            
-            // Sync up the dropdown value UI automatically so it matches the canvas layout
-            if (document.getElementById('mapSelect')) {
-                document.getElementById('mapSelect').value = firstValidMap.toLowerCase();
-            }
-        }
-
-        loadPayloadIntoState(dataToLoad);
-
-    } catch (err) {
-        console.error("Query failed:", err);
-        document.getElementById('matchMeta').innerText = "❌ No records found matching current parameter choices.";
+    // 2. SLICE ON THE FLY: Dynamically filter down the cached arrays based on the active dropdown selection
+    if (!mapName || !payload.available_maps.includes(mapName)) {
+        mapName = payload.available_maps[0];
     }
+
+    const rawMapData = payload.maps[mapName] || { trajectories: [], grenades: [] };
+
+    // Filter trajectories and grenades on the fly based on 'ct', 't', or 'all'
+    const filteredTrajectories = rawMapData.trajectories.filter(t => 
+        sideLower === 'all' || t.side?.toLowerCase() === sideLower
+    );
+    
+    const filteredGrenades = rawMapData.grenades ? rawMapData.grenades.filter(g => 
+        sideLower === 'all' || g.side?.toLowerCase() === sideLower
+    ) : [];
+
+    const mapSlice = {
+        map_name: mapName,
+        available_maps: payload.available_maps,
+        trajectories: filteredTrajectories,
+        grenades: filteredGrenades
+    };
+
+    loadPayloadIntoState(mapSlice);
+
+
 }
 
 function togglePlayback() {
@@ -651,7 +531,7 @@ function drawFrameAt(exactFrameIndex, currentTimestamp) {
         ctx.stroke();
 
         // Round Label
-        drawText(`Round ${round.round_num} (${round.side.toUpperCase()})`, drawX + 14, drawY + 4, 'bold 11px sans-serif', { align: 'left', shadow: true });
+        //drawText(`Round ${round.round_num} (${round.side.toUpperCase()})`, drawX + 14, drawY + 4, 'bold 11px sans-serif', { align: 'left', shadow: true });
     });
 
     // 2. PROCESS GRENADES
