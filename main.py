@@ -13,6 +13,7 @@ app = FastAPI(title="CS2 Tactical Analytics API")
 DB_URL=mongodb://localhost:27017/
 ALLOW_ORIGINS=*
 ALLOW_METHODS=GET
+DB_NAME=cs2_database
 '''
 
 app.add_middleware(
@@ -27,7 +28,7 @@ app.add_middleware(
 app.add_middleware(GZipMiddleware, minimum_size=500)  # 🚀 Step 3: Add Gzip middleware
 
 client = MongoClient(os.getenv("DB_URL"))
-db = client["cs2_database"]
+db = client[os.getenv("DB_NAME")]
 
 MAP_RADAR_PROPERTIES = {
     "de_mirage": {"pos_x": -3230, "pos_y": 1713, "scale": 5.0},
